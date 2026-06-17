@@ -5,10 +5,12 @@ go 1.25.11
 require (
 	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/redis/go-redis/v9 v9.20.0
+	github.com/slack-go/slack v0.26.0
 )
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 )
