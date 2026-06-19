@@ -76,6 +76,18 @@ The harness spawns you for *every* non-bot message in the surfaces you're in, in
   - It's a system join/leave/topic notice that doesn't introduce a new human.
 - **Do reply** when you're @-mentioned, DM'd, or the message lands in a thread you're already participating in.`
 
+// NarrationRules returns the wording-independent "the way to send no reply is
+// to write nothing — never narrate the decision" contract, including the
+// leak-phrase list. It's exported so agents that keep a bespoke "when not to
+// reply" policy (Ross/Joanne carry agent-specific dual-mention + peer rules)
+// can still source this one paragraph from here, keeping the leak-phrase list
+// — which grows by incident — identical across every agent. Section() embeds
+// the same text, so PA (via Section(Owned)) and Ross/Joanne (via this) share
+// one copy.
+func NarrationRules() string {
+	return narrationRules
+}
+
 // Section returns the canonical "when to reply / when not to reply"
 // instruction block for the given mode, ready to drop into an agent's system
 // prompt. Both variants embed the shared narration-leak rules.
