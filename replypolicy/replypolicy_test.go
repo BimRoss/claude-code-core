@@ -65,6 +65,27 @@ func TestBothModesShareNarrationRules(t *testing.T) {
 	}
 }
 
+func TestNarrationRulesIsSupersetOfAllAgents(t *testing.T) {
+	// The shared list must be a superset of every agent's historical
+	// leak-phrase coaching so migrating any agent onto it loses no example.
+	// PA: "just lurking"/"stepping out"; Ross: "I'll stay quiet on this one";
+	// Joanne: "carry on"/"all yours".
+	nr := NarrationRules()
+	for _, phrase := range []string{
+		"Staying silent.",
+		"Not for me.",
+		"I'll stay quiet on this one.",
+		"just lurking.",
+		"all yours.",
+		"carry on",
+		"My bot ID is",
+	} {
+		if !strings.Contains(nr, phrase) {
+			t.Errorf("shared narration rules dropped agent phrase: %q", phrase)
+		}
+	}
+}
+
 func TestNarrationRulesIsTheSharedSource(t *testing.T) {
 	nr := NarrationRules()
 	if !strings.Contains(nr, "The way to send no reply is to **write nothing.**") {
