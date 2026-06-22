@@ -100,7 +100,7 @@ func TestFormat_rootAndThreadWithMarker(t *testing.T) {
 
 func TestCompactMessageText_truncates(t *testing.T) {
 	long := strings.Repeat("x", 500)
-	got := compactMessageText(long)
+	got := CompactText(long)
 	if !strings.HasSuffix(got, "…") || len([]rune(got)) != 401 {
 		t.Errorf("expected 400 chars + ellipsis, got len(runes)=%d", len([]rune(got)))
 	}

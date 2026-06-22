@@ -171,12 +171,12 @@ func Format(root, thread []slack.Message, threadTS string, id Identity) string {
 // spawn's thread, so the agent can locate itself in the channel without
 // scanning for ts matches.
 func formatRootLine(m slack.Message, currentThreadTS string) string {
-	text := compactMessageText(m.Text)
+	text := CompactText(m.Text)
 	if text == "" && m.BotProfile == nil && len(m.Files) == 0 {
 		return ""
 	}
-	ts := formatSlackTS(m.Timestamp)
-	author := displayName(m)
+	ts := FormatSlackTS(m.Timestamp)
+	author := DisplayName(m)
 	marker := ""
 	if currentThreadTS != "" && m.Timestamp == currentThreadTS {
 		marker = " ← you are here"
@@ -187,12 +187,12 @@ func formatRootLine(m slack.Message, currentThreadTS string) string {
 // formatThreadLine renders one thread message — no metadata since we're showing
 // the full transcript.
 func formatThreadLine(m slack.Message) string {
-	text := compactMessageText(m.Text)
+	text := CompactText(m.Text)
 	if text == "" {
 		return ""
 	}
-	ts := formatSlackTS(m.Timestamp)
-	return fmt.Sprintf("[%s] @%s: %s", ts, displayName(m), quote(text))
+	ts := FormatSlackTS(m.Timestamp)
+	return fmt.Sprintf("[%s] @%s: %s", ts, DisplayName(m), quote(text))
 }
 
 // replyMetadata returns " (3 replies, last 14:31, with @x, @y)" or "" when the
@@ -204,7 +204,7 @@ func replyMetadata(m slack.Message) string {
 	}
 	parts := []string{fmt.Sprintf("%d replies", m.ReplyCount)}
 	if m.LatestReply != "" {
-		parts = append(parts, "last "+formatSlackTSShort(m.LatestReply))
+		parts = append(parts, "last "+FormatSlackTSShort(m.LatestReply))
 	}
 	if len(m.ReplyUsers) > 0 {
 		users := make([]string, 0, len(m.ReplyUsers))
@@ -216,7 +216,9 @@ func replyMetadata(m slack.Message) string {
 	return " (" + strings.Join(parts, ", ") + ")"
 }
 
-func displayName(m slack.Message) string {
+// DisplayName resolves the best human-readable author label for a message:
+// bot profile name, then username, then user ID, then "unknown".
+func DisplayName(m slack.Message) string {
 	if m.BotProfile != nil && m.BotProfile.Name != "" {
 		return m.BotProfile.Name
 	}
@@ -229,11 +231,11 @@ func displayName(m slack.Message) string {
 	return "unknown"
 }
 
-// compactMessageText collapses multi-line Slack text to a single line so each
+// CompactText collapses multi-line Slack text to a single line so each
 // root-message entry stays one line — the preamble is a topology view, not a
 // transcript. The current thread's full text is preserved verbatim in the
 // thread section.
-func compactMessageText(s string) string {
+func CompactText(s string) string {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return ""
@@ -250,10 +252,10 @@ func quote(s string) string {
 	return `"` + s + `"`
 }
 
-// formatSlackTS turns "1700000000.000123" into "2026-05-29 14:23:14" in UTC.
+// FormatSlackTS turns "1700000000.000123" into "2026-05-29 14:23:14" in UTC.
 // Falls back to the raw string on parse failure so a malformed ts never blanks
 // the line.
-func formatSlackTS(ts string) string {
+func FormatSlackTS(ts string) string {
 	t, ok := parseSlackTS(ts)
 	if !ok {
 		return ts
@@ -261,8 +263,8 @@ func formatSlackTS(ts string) string {
 	return t.UTC().Format("2006-01-02 15:04:05")
 }
 
-// formatSlackTSShort returns just HH:MM — used for compact reply metadata.
-func formatSlackTSShort(ts string) string {
+// FormatSlackTSShort returns just HH:MM — used for compact reply metadata.
+func FormatSlackTSShort(ts string) string {
 	t, ok := parseSlackTS(ts)
 	if !ok {
 		return ts
