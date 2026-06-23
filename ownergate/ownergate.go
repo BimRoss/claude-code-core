@@ -37,8 +37,9 @@ const (
 	// thread. Fired when the operator @-mentions someone else in a thread
 	// we owned — the standard hand-off pattern.
 	SilentDropRelease
-	// Reject: a non-owner @-mentioned us or DM'd us. Post the
-	// "sorry, only <owner> can summon me" reply and drop.
+	// Reject: a non-owner @-mentioned us or DM'd us. Drop without reply.
+	// Distinct from SilentDrop so dispatchers can log the address attempt
+	// separately for telemetry.
 	Reject
 )
 
