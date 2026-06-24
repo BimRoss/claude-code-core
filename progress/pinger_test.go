@@ -1,58 +1,59 @@
 package progress
 
 import (
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
-// TestPingerFiresWhenSilent verifies a heartbeat is posted when no real output
-// has landed inside minGap.
+// TestPingerFiresWhenSilent verifies a line is posted when no real output has
+// landed inside minGap.
 func TestPingerFiresWhenSilent(t *testing.T) {
 	var last atomic.Int64
-	// Last post was well outside minGap, so a heartbeat should fire.
+	// Last post was well outside minGap, so a line should fire.
 	last.Store(time.Now().Add(-10 * time.Minute).UnixNano())
 
-	var mu sync.Mutex
 	var got []string
-	done := make(chan struct{})
 	p := &Pinger{
-		Reply:        func(s string) { mu.Lock(); got = append(got, s); mu.Unlock() },
+		Reply:        func(s string) { got = append(got, s) },
 		LastPostedAt: &last,
-		Phrases:      []string{"a", "b", "c"},
+		Phrases:      []string{"first", "second"},
 	}
-	// Drive the loop body directly rather than waiting minutes for the timer.
-	p.tickOnce(&got, &mu, -1)
+	// Drive one firing directly rather than waiting minutes for the timer.
+	idx := 0
+	posted := p.tickOnce(&idx)
 
-	close(done)
-	mu.Lock()
-	defer mu.Unlock()
-	if len(got) != 1 {
-		t.Fatalf("expected 1 heartbeat, got %d (%v)", len(got), got)
+	if !posted || len(got) != 1 {
+		t.Fatalf("expected 1 line, got %d (%v)", len(got), got)
+	}
+	if got[0] != "first" {
+		t.Fatalf("expected lines walked in order, got %q first", got[0])
 	}
 }
 
-// tickOnce mirrors one timer firing, exposed for the test so it doesn't have to
-// wait real minutes. Kept in the test file so the production type stays clean.
-func (p *Pinger) tickOnce(got *[]string, mu *sync.Mutex, lastPhrase int) {
+// tickOnce mirrors one timer firing for index *idx: it posts the line at *idx
+// if quiet enough and advances *idx, reporting whether it posted. Kept in the
+// test file (the index lives in the caller) so the production type stays clean
+// and matches the in-order, walk-once semantics of Run.
+func (p *Pinger) tickOnce(idx *int) bool {
 	phrases := p.Phrases
 	if len(phrases) == 0 {
 		phrases = DefaultPhrases
 	}
-	now := time.Now()
-	last := time.Unix(0, p.LastPostedAt.Load())
-	if now.Sub(last) >= minGap {
-		idx := 0
-		if idx == lastPhrase {
-			idx = (idx + 1) % len(phrases)
-		}
-		p.Reply(phrases[idx])
+	if *idx >= len(phrases) {
+		return false
 	}
+	last := time.Unix(0, p.LastPostedAt.Load())
+	if time.Since(last) >= minGap {
+		p.Reply(phrases[*idx])
+		*idx++
+		return true
+	}
+	return false
 }
 
-// TestPingerSuppressedAfterRecentPost verifies no heartbeat when a real post
-// landed inside minGap.
+// TestPingerSuppressedAfterRecentPost verifies no line when a real post landed
+// inside minGap.
 func TestPingerSuppressedAfterRecentPost(t *testing.T) {
 	var last atomic.Int64
 	last.Store(time.Now().UnixNano()) // just posted
@@ -62,16 +63,41 @@ func TestPingerSuppressedAfterRecentPost(t *testing.T) {
 		Reply:        func(s string) { got = append(got, s) },
 		LastPostedAt: &last,
 	}
-	var mu sync.Mutex
-	p.tickOnce(&got, &mu, -1)
-
-	if len(got) != 0 {
+	idx := 0
+	if posted := p.tickOnce(&idx); posted || len(got) != 0 {
 		t.Fatalf("expected suppression, got %d posts (%v)", len(got), got)
 	}
 }
 
+// TestPingerWalksOnceThenStops verifies the pinger posts each line once, in
+// order, and stops — no repeats, no looping past the end of the list.
+func TestPingerWalksOnceThenStops(t *testing.T) {
+	var last atomic.Int64
+	last.Store(time.Now().Add(-10 * time.Minute).UnixNano())
+
+	var got []string
+	p := &Pinger{
+		Reply: func(s string) {
+			got = append(got, s)
+			// A heartbeat is a real post too: a naive impl might re-trigger off
+			// its own write. Keep LastPostedAt old so suppression isn't what
+			// stops us — exhausting the list is.
+		},
+		LastPostedAt: &last,
+		Phrases:      []string{"one", "two"},
+	}
+	// Fire more times than there are phrases; should still only post 2.
+	idx := 0
+	for i := 0; i < 5; i++ {
+		p.tickOnce(&idx)
+	}
+	if len(got) != 2 || got[0] != "one" || got[1] != "two" {
+		t.Fatalf("expected [one two] once, got %v", got)
+	}
+}
+
 // TestDefaultPhrasesNonEmpty guards against an empty default set, which would
-// panic on rand.Intn(0).
+// index out of range on the first firing.
 func TestDefaultPhrasesNonEmpty(t *testing.T) {
 	if len(DefaultPhrases) == 0 {
 		t.Fatal("DefaultPhrases must not be empty")
