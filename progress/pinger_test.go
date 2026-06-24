@@ -4,6 +4,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/bimross/claude-code-core/statusroute"
 )
 
 // TestPingerFiresWhenSilent verifies a line is posted when no real output has
@@ -28,6 +30,29 @@ func TestPingerFiresWhenSilent(t *testing.T) {
 	}
 	if got[0] != "first" {
 		t.Fatalf("expected lines walked in order, got %q first", got[0])
+	}
+}
+
+// TestPingerSuppressedOnPerTickDigest verifies that a per_tick digest-loop
+// spawn (channel surface, no thread ts) never posts a heartbeat, even when the
+// task has been silent well past minGap. Root is reserved for the digest line;
+// a "still going" filler there is the makeacompany-ai#676 leak.
+func TestPingerSuppressedOnPerTickDigest(t *testing.T) {
+	var last atomic.Int64
+	last.Store(time.Now().Add(-30 * time.Minute).UnixNano())
+
+	var got []string
+	done := make(chan struct{})
+	close(done) // Run should return before it would ever read done.
+	p := &Pinger{
+		Reply:        func(s string) { got = append(got, s) },
+		LastPostedAt: &last,
+		Spawn:        statusroute.Spawn{ChannelSurface: true, ThreadTS: ""},
+	}
+	p.Run(done)
+
+	if len(got) != 0 {
+		t.Fatalf("per_tick digest spawn must post no heartbeat, got %v", got)
 	}
 }
 
