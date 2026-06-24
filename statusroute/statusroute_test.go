@@ -23,19 +23,33 @@ func TestHeartbeatTarget(t *testing.T) {
 			want: TargetThread,
 		},
 		{
-			// Managed loop (deploy-watcher, seed loops): the synthetic tick
-			// carries the persistent anchor ts as its thread ts, so the
-			// heartbeat threads under the anchor, same as the tick body.
-			name: "managed loop tick threads under anchor",
-			in:   Spawn{ChannelSurface: true, ThreadTS: "1782283200.697349"},
-			want: TargetThread,
+			// Managed loop tick (deploy-watcher, seed loops): synthetic, no
+			// operator waiting. Suppress even though it carries an anchor ts.
+			name: "managed loop tick suppresses the heartbeat",
+			in:   Spawn{ChannelSurface: true, ThreadTS: "1782283200.697349", IsLoopTick: true},
+			want: TargetSuppress,
 		},
 		{
-			// per_tick digest loop (chart, briefing, quote, triage): the
-			// synthetic tick carries no thread ts because root is reserved for
-			// the one digest line. The heartbeat must be suppressed, not
-			// routed to root. This is the makeacompany-ai#676 leak.
+			// Threaded loop tick (the #461 default: chart, briefing, triage):
+			// carries an anchor thread ts, but it is still a synthetic tick with
+			// no operator. Suppress — without IsLoopTick the non-empty ThreadTS
+			// would wrongly route it to TargetThread, the #461 regression.
+			name: "threaded loop tick suppresses despite anchor ts",
+			in:   Spawn{ChannelSurface: true, ThreadTS: "1782320738.845949", IsLoopTick: true},
+			want: TargetSuppress,
+		},
+		{
+			// per_tick digest loop (opt-in legacy): no thread ts and a loop
+			// tick. Either gate suppresses it; this is the makeacompany-ai#676
+			// leak shape.
 			name: "per_tick digest loop suppresses the heartbeat",
+			in:   Spawn{ChannelSurface: true, ThreadTS: "", IsLoopTick: true},
+			want: TargetSuppress,
+		},
+		{
+			// Defense in depth: a channel spawn with no thread ts that somehow
+			// is not flagged a loop tick still suppresses rather than risk root.
+			name: "channel surface, no thread, not flagged still suppresses",
 			in:   Spawn{ChannelSurface: true, ThreadTS: ""},
 			want: TargetSuppress,
 		},
@@ -81,8 +95,9 @@ func TestShouldPostHeartbeat(t *testing.T) {
 		in   Spawn
 		want bool
 	}{
-		{"per_tick digest loop is gated off", Spawn{ChannelSurface: true, ThreadTS: ""}, false},
-		{"managed loop posts", Spawn{ChannelSurface: true, ThreadTS: "1782283200.697349"}, true},
+		{"per_tick loop tick is gated off", Spawn{ChannelSurface: true, ThreadTS: "", IsLoopTick: true}, false},
+		{"threaded loop tick gated off despite anchor ts", Spawn{ChannelSurface: true, ThreadTS: "1782320738.845949", IsLoopTick: true}, false},
+		{"managed loop tick is gated off", Spawn{ChannelSurface: true, ThreadTS: "1782283200.697349", IsLoopTick: true}, false},
 		{"human thread posts", Spawn{ChannelSurface: true, ThreadTS: "1782319763.887179"}, true},
 		{"dm posts", Spawn{ChannelSurface: false, ThreadTS: ""}, true},
 	}

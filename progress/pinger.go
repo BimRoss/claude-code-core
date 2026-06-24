@@ -73,11 +73,12 @@ type Pinger struct {
 	// Phrases overrides DefaultPhrases when non-empty. Walked in order, once.
 	Phrases []string
 	// Spawn is the routing context for this spawn. Run suppresses the
-	// heartbeat entirely when posting it would land at a channel root (a
-	// per_tick digest loop, whose root is reserved for the one digest line),
-	// per statusroute.ShouldPostHeartbeat and makeacompany-ai#676. The zero
-	// value (a DM that always posts) preserves the pre-#676 always-post
-	// behavior, so an agent that doesn't set Spawn is never wrongly silenced.
+	// heartbeat entirely when it has no useful destination: any synthetic loop
+	// tick (no operator waiting, in any posting mode), or a channel surface
+	// with no thread to nest under. See statusroute.ShouldPostHeartbeat,
+	// makeacompany-ai#676, and claude-code-ross#461. The zero value (a DM that
+	// always posts) preserves the pre-#676 always-post behavior, so an agent
+	// that doesn't set Spawn is never wrongly silenced.
 	Spawn statusroute.Spawn
 }
 
@@ -89,9 +90,9 @@ type Pinger struct {
 //	go (&progress.Pinger{Reply: reply, LastPostedAt: &lastPostedAt}).Run(done)
 //	defer close(done)
 func (p *Pinger) Run(done <-chan struct{}) {
-	// A heartbeat must never land at a channel root. On a per_tick digest loop
-	// (channel surface, no thread to nest under) there is nowhere to put it, so
-	// don't run at all — root stays reserved for the digest line. See #676.
+	// A heartbeat must never land at a channel root, and a synthetic loop tick
+	// has no operator to reassure in any mode. When the spawn has no useful
+	// destination, don't run at all. See #676 and claude-code-ross#461.
 	if !statusroute.ShouldPostHeartbeat(p.Spawn) {
 		return
 	}

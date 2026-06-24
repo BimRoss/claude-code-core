@@ -56,6 +56,30 @@ func TestPingerSuppressedOnPerTickDigest(t *testing.T) {
 	}
 }
 
+// TestPingerSuppressedOnThreadedLoopTick verifies the #461 integration: a
+// threaded loop tick carries an anchor thread ts (non-empty ThreadTS), but it
+// is still a synthetic tick with no operator. IsLoopTick must keep the
+// heartbeat suppressed; otherwise the non-empty ThreadTS would route it back
+// threaded under the anchor.
+func TestPingerSuppressedOnThreadedLoopTick(t *testing.T) {
+	var last atomic.Int64
+	last.Store(time.Now().Add(-30 * time.Minute).UnixNano())
+
+	var got []string
+	done := make(chan struct{})
+	close(done)
+	p := &Pinger{
+		Reply:        func(s string) { got = append(got, s) },
+		LastPostedAt: &last,
+		Spawn:        statusroute.Spawn{ChannelSurface: true, ThreadTS: "1782320738.845949", IsLoopTick: true},
+	}
+	p.Run(done)
+
+	if len(got) != 0 {
+		t.Fatalf("threaded loop tick must post no heartbeat, got %v", got)
+	}
+}
+
 // tickOnce mirrors one timer firing for index *idx: it posts the line at *idx
 // if quiet enough and advances *idx, reporting whether it posted. Kept in the
 // test file (the index lives in the caller) so the production type stays clean
