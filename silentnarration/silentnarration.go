@@ -84,6 +84,13 @@ var patterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\bthis\s+message\s+is\s+for\b`),
 	regexp.MustCompile(`(?i)\bno\s+(response|reply)\b\.?$`),
 	regexp.MustCompile(`(?i)\bnothing\s+(for\s+me\s+)?to\s+add\b`),
+	// makeacompany-ai#483 — deploy-watcher ticks are supposed to write nothing
+	// on a no-op, but the model narrated the decision instead: "Still
+	// in_progress — no PR yet. Tick silent." / "Still no gitops PR — tick
+	// silent." The literal "tick silent" marker landed in the channel
+	// repeatedly. Same family as the silence-rule leak, so it folds into the
+	// shared catalog rather than staying Ross-local.
+	regexp.MustCompile(`(?i)\btick\s+silent\b`),
 }
 
 // LooksLike reports whether s is short, single-line meta-commentary about

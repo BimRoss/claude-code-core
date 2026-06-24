@@ -24,6 +24,8 @@ import (
 	"math/rand"
 	"sync/atomic"
 	"time"
+
+	"github.com/bimross/claude-code-core/statusroute"
 )
 
 // DefaultPhrases are posted in order, once each, then the pinger goes silent.
@@ -70,6 +72,14 @@ type Pinger struct {
 	LastPostedAt *atomic.Int64
 	// Phrases overrides DefaultPhrases when non-empty. Walked in order, once.
 	Phrases []string
+	// Spawn is the routing context for this spawn. Run suppresses the
+	// heartbeat entirely when it has no useful destination: any synthetic loop
+	// tick (no operator waiting, in any posting mode), or a channel surface
+	// with no thread to nest under. See statusroute.ShouldPostHeartbeat,
+	// makeacompany-ai#676, and claude-code-ross#461. The zero value (a DM that
+	// always posts) preserves the pre-#676 always-post behavior, so an agent
+	// that doesn't set Spawn is never wrongly silenced.
+	Spawn statusroute.Spawn
 }
 
 // Run blocks until done is closed, emitting at most len(Phrases) lines on the
@@ -80,6 +90,12 @@ type Pinger struct {
 //	go (&progress.Pinger{Reply: reply, LastPostedAt: &lastPostedAt}).Run(done)
 //	defer close(done)
 func (p *Pinger) Run(done <-chan struct{}) {
+	// A heartbeat must never land at a channel root, and a synthetic loop tick
+	// has no operator to reassure in any mode. When the spawn has no useful
+	// destination, don't run at all. See #676 and claude-code-ross#461.
+	if !statusroute.ShouldPostHeartbeat(p.Spawn) {
+		return
+	}
 	phrases := p.Phrases
 	if len(phrases) == 0 {
 		phrases = DefaultPhrases
