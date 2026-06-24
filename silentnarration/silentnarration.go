@@ -4,12 +4,13 @@
 // this package is the backstop that catches the model when it writes a
 // short meta-commentary line instead of staying silent.
 //
-// LooksLike(s) returns true if s is short, single-line self-narration about
-// the model's choice not to reply (e.g. "Staying silent.", "Not addressed
-// to me.", "This message is for Grant, not me. No reply."). Each consuming
-// agent's reply gate calls LooksLike on the model's stdout and drops the
-// post if it matches. The wired-up callsites currently live in
-// cmd/{ross,joanne,personal-agent}/handlers.go.
+// LooksLike(s) returns true if s is self-narration about the model's choice
+// not to reply (e.g. "Staying silent.", "Not addressed to me.", "This
+// message is for Grant, not me. No reply."). It matches both the terse
+// one-liner and the multi-line paragraph form, the latter added after
+// ross#464. Each consuming agent's reply gate calls LooksLike on the model's
+// stdout and drops the post if it matches. The wired-up callsites currently
+// live in cmd/{ross,joanne,personal-agent}/handlers.go.
 //
 // Before this package existed, the regex catalog was triplicated across
 // ross/cmd, joanne/cmd, and personal-agent/cmd as `silent_narration.go`,
@@ -29,11 +30,17 @@ import (
 	"strings"
 )
 
-// MaxChars is the upper bound at which we still consider a reply "short
-// enough to plausibly be self-narration." Real replies that incidentally
-// contain a matching phrase (e.g. a long deploy summary that mentions "no
-// response needed yet from CI") get a pass.
-const MaxChars = 200
+// MaxChars is the upper bound, applied PER LINE, at which we still consider a
+// line "short enough to plausibly be self-narration." Real replies that
+// incidentally contain a matching phrase (e.g. a long deploy summary that
+// mentions "no response needed yet from CI") run past it and get a pass.
+//
+// It was 200 until ross#464: the model's leak shape drifted from a terse
+// one-liner into a ~230-char sentence, sailing over the old cap and reaching
+// the channel. Raised to 260 — above the longest narration sentence we've
+// seen, still well below the substantive-prose band (the conservative
+// false-positive guard test runs ~286 chars).
+const MaxChars = 260
 
 // patterns is the allowlist of self-referential meta-commentary the model
 // sometimes emits when it should have exited silently. Each pattern is
@@ -93,26 +100,44 @@ var patterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\btick\s+silent\b`),
 }
 
-// LooksLike reports whether s is short, single-line meta-commentary about
-// the model's choice not to reply. When true, the harness should suppress
-// the post rather than letting the narration leak into Slack.
+// LooksLike reports whether s is meta-commentary about the model's choice
+// not to reply. When true, the harness should suppress the post rather than
+// letting the narration leak into Slack.
 //
 // The detector intentionally errs on the side of letting messages through:
 // false positives are worse than false negatives, since the prompt-side
 // rule (see [replypolicy.NarrationRules]) is the primary fix and this is
 // just a safety net.
+//
+// A reply is treated as narration only when EVERY non-empty line is itself a
+// short line that matches the catalog. This catches the multi-line paragraph
+// form of the leak (ross#464: "...nothing for me to add.\n\nNo reply
+// needed.") while preserving the conservative posture — a genuine reply
+// almost always carries at least one line that is real content and matches
+// nothing, which lets the whole thing through.
 func LooksLike(s string) bool {
 	s = strings.TrimSpace(s)
-	if s == "" || len(s) > MaxChars {
+	if s == "" {
 		return false
 	}
-	// Multi-line replies are almost always real content. Self-narration is
-	// a single declarative sentence.
-	if strings.ContainsAny(s, "\n") {
-		return false
+	matchedAny := false
+	for _, raw := range strings.Split(s, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue // blank separators don't count for or against.
+		}
+		if len(line) > MaxChars || !matchesCatalog(line) {
+			return false // one substantive line is enough to let it through.
+		}
+		matchedAny = true
 	}
+	return matchedAny
+}
+
+// matchesCatalog reports whether line matches any self-narration pattern.
+func matchesCatalog(line string) bool {
 	for _, re := range patterns {
-		if re.MatchString(s) {
+		if re.MatchString(line) {
 			return true
 		}
 	}

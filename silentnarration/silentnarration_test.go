@@ -79,6 +79,18 @@ func TestLooksLike(t *testing.T) {
 		// happen to contain a matching phrase — the safety net is conservative.
 		{"long message with match", "Deploy is green and rolled out across dev and prod stages. There's nothing to add on the failure scenarios since CI ran clean across all three pipelines and the canary held steady for the full soak window. Let me know if you want a follow-up summary or a diff against the prior release.", false},
 		{"multi-line", "Staying silent.\nJust kidding, here's the real reply.", false},
+
+		// ross#464 (C0B6SB6UA4E, Nexus blog-feedback thread) — the leak shape
+		// drifted into a multi-line paragraph that beat both the old total
+		// char cap (~230 > 200) and the old single-line guard (blank line).
+		// Per-line matching catches it: every non-empty line is narration.
+		{"incident 464 paragraph", "The thread already got its answer and the closing note doesn't mention me, and there's nothing for me to add.\n\nNo reply needed.", true},
+		// One real line among the narration must let the whole thing through —
+		// the false-positive guard that keeps per-line matching conservative.
+		{"464 mixed real line", "Here's the deploy summary you asked for: all three stages are green and the canary held.\nNo reply needed.", false},
+		// The char-cap path on its own: a single ~230-char narration line was
+		// waved through by the old 200 cap. With the cap raised it's caught.
+		{"464 long single-line narration", "After reading through the whole thread one more time to be sure I wasn't missing an actual request directed at me, the closing note doesn't mention me and there is genuinely nothing for me to add here, so no reply needed.", true},
 	}
 
 	for _, tc := range cases {
