@@ -3,8 +3,22 @@ package spawnsettings
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// TestDefaultModelInvariant locks the floor-of-the-ladder promise: DefaultModel
+// must be a non-1M model that the pool can actually run, since every unpinned
+// spawn and every degraded invalid pin lands on it. A regression to a [1m]
+// value would silently take the fleet down (no 1M credits on the pool).
+func TestDefaultModelInvariant(t *testing.T) {
+	if strings.Contains(DefaultModel, "[1m]") {
+		t.Fatalf("DefaultModel = %q must not be a [1m] variant", DefaultModel)
+	}
+	if !AllowedModels(false)[DefaultModel] {
+		t.Fatalf("DefaultModel = %q must be in the non-1M allowlist", DefaultModel)
+	}
+}
 
 // writeChannelSettings drops a .claude/settings.json under dir with the given
 // raw JSON body and returns dir.

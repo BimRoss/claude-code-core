@@ -57,7 +57,15 @@ const (
 	// DefaultModel / DefaultEffort are the floor of the precedence ladder — what
 	// a spawn gets when nothing else pins a value, and where an invalid pin
 	// degrades to. Must always be a non-1M model that runs on the pool.
-	DefaultModel  = "claude-opus-4-8"
+	//
+	// Sonnet is the interactive floor (2026-06-25): one slot in the shared
+	// OAuth pool hit its rate limit, so the default tier'd down from Opus to
+	// conserve headroom. Opus is still reached for heavy lifts via Tier-3
+	// Task-tool subagents, or pinned per-agent (ROSS/JOANNE_DEFAULT_MODEL) /
+	// per-channel. Ross and Joanne pin Sonnet explicitly in their deployment
+	// env; the personal agent inherits this constant (its reconciler scrubs
+	// any per-pod DEFAULT_MODEL, so this is its only interactive default).
+	DefaultModel  = "claude-sonnet-4-6"
 	DefaultEffort = "high"
 
 	// SettingsFile is the per-workspace overrides file an agent-in-a-channel can
