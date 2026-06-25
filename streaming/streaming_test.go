@@ -128,11 +128,34 @@ func TestStream_SkipsMalformedAndUnknown(t *testing.T) {
 }
 
 func TestRedactAndScrubPreview(t *testing.T) {
-	if got := Redact("token shpat_abcdefghijklmnop1234 here"); strings.Contains(got, "shpat_abcdef") {
-		t.Fatalf("shpat_ not redacted: %q", got)
+	// Bare token shapes across the secret families the fleet handles — each
+	// must be fully redacted, leaving no recoverable prefix.
+	tokenCases := []struct{ name, in, leak string }{
+		{"shopify", "token shpat_abcdefghijklmnop1234 here", "shpat_abcdef"},
+		{"anthropic", "key sk-ant-api03-abcdefghijklmnopqrstuvwx done", "sk-ant-api03"},
+		{"slack", "t xoxb-12345678901-abcdefghijkl end", "xoxb-1234"},
+		{"github-classic", "ghp_abcdefghijklmnopqrstuvwxyz012345 x", "ghp_abcdef"},
+		{"github-pat", "github_pat_abcdefghijklmnopqrstuvwxyz x", "github_pat_abcd"},
+		{"google", "AIzaABCDEFGHIJKLMNOPQRSTUVWX1234 x", "AIzaABCD"},
 	}
-	if got := Redact("SHOPIFY_ADMIN_TOKEN=secretvalue x"); !strings.Contains(got, "SHOPIFY_ADMIN_TOKEN=[REDACTED]") {
-		t.Fatalf("env-shaped not redacted: %q", got)
+	for _, c := range tokenCases {
+		got := Redact(c.in)
+		if strings.Contains(got, c.leak) {
+			t.Errorf("%s: token leaked through Redact: %q", c.name, got)
+		}
+		if !strings.Contains(got, "[REDACTED_TOKEN]") {
+			t.Errorf("%s: expected [REDACTED_TOKEN] marker, got %q", c.name, got)
+		}
+	}
+	// Env-shaped assignments keep the KEY=, redact the value.
+	for _, key := range []string{"SHOPIFY_ADMIN_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_2", "GH_TOKEN"} {
+		got := Redact(key + "=supersecretvalue x")
+		if !strings.Contains(got, key+"=[REDACTED]") {
+			t.Errorf("env-shaped %s not redacted: %q", key, got)
+		}
+		if strings.Contains(got, "supersecretvalue") {
+			t.Errorf("env-shaped %s leaked value: %q", key, got)
+		}
 	}
 	// Redaction happens before truncation: a secret at the head is gone even if
 	// truncation would have cut it.
