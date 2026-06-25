@@ -133,6 +133,15 @@ func LoadMarkers[F any](workspaceBase string) []Marker[F] {
 		}
 		markers = append(markers, loadInWorkspace[F](filepath.Join(workspaceBase, e.Name()))...)
 	}
+	// Also scan the base's OWN marker dir. Agents with shared-base surfaces
+	// (e.g. Joanne's welcome-channel / MPIM conversations) write markers to
+	// <base>/.session-resume/ directly rather than under a per-channel subdir,
+	// so the loop above would miss them — dropping replay of interrupted
+	// onboarding turns. Per-channel agents (Ross/PA) never write there, so this
+	// is a no-op for them. The loop's pass over the ".session-resume" dir entry
+	// itself looks for <base>/.session-resume/.session-resume/ (nonexistent →
+	// nil), so there's no double-count.
+	markers = append(markers, loadInWorkspace[F](workspaceBase)...)
 	return markers
 }
 
