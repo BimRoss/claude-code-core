@@ -11,18 +11,19 @@ import (
 func base() Decision {
 	return Decision{
 		Attempt:         0,
+		MaxAttempts:     2,
 		NonZeroExit:     true,
 		Duration:        1500 * time.Millisecond, // the observed ~1.5s fast-fail
 		PostedToChannel: false,
 		SessionLockRace: false,
 		Aborted:         false,
-		HasSecondSlot:   true,
+		HasUntriedSlot:  true,
 	}
 }
 
 func TestShouldRetry_HappyPath(t *testing.T) {
 	if !base().ShouldRetry() {
-		t.Fatal("a fast, output-free, non-zero exit on a 2-slot pool should retry")
+		t.Fatal("a fast, output-free, non-zero exit with an untried slot should retry")
 	}
 }
 
@@ -31,12 +32,12 @@ func TestShouldRetry_Blockers(t *testing.T) {
 		name   string
 		mutate func(*Decision)
 	}{
-		{"already retried", func(d *Decision) { d.Attempt = 1 }},
+		{"spent all attempts", func(d *Decision) { d.Attempt = 1 }},
 		{"clean exit", func(d *Decision) { d.NonZeroExit = false }},
 		{"aborted (timeout/stop/drain)", func(d *Decision) { d.Aborted = true }},
 		{"session lock race", func(d *Decision) { d.SessionLockRace = true }},
 		{"already posted to channel", func(d *Decision) { d.PostedToChannel = true }},
-		{"no second slot", func(d *Decision) { d.HasSecondSlot = false }},
+		{"no untried slot", func(d *Decision) { d.HasUntriedSlot = false }},
 		{"slow failure", func(d *Decision) { d.Duration = 30 * time.Second }},
 	}
 	for _, c := range cases {
@@ -47,6 +48,37 @@ func TestShouldRetry_Blockers(t *testing.T) {
 				t.Errorf("%s should block the retry, but ShouldRetry returned true", c.name)
 			}
 		})
+	}
+}
+
+func TestShouldRetry_IteratesNSlots(t *testing.T) {
+	// A 4-slot pool: attempts 0,1,2 may retry (untried slots remain); attempt 3
+	// is the last slot, so it must not retry.
+	d := base()
+	d.MaxAttempts = 4
+	for attempt := 0; attempt < 3; attempt++ {
+		d.Attempt = attempt
+		if !d.ShouldRetry() {
+			t.Errorf("attempt %d of a 4-slot pool should still retry", attempt)
+		}
+	}
+	d.Attempt = 3 // last slot tried
+	if d.ShouldRetry() {
+		t.Error("attempt 3 (final slot) of a 4-slot pool must not retry")
+	}
+}
+
+func TestShouldRetry_DefaultMaxAttemptsIsOneRetry(t *testing.T) {
+	// MaxAttempts unset (0) falls back to DefaultMaxAttempts: one retry only.
+	d := base()
+	d.MaxAttempts = 0
+	d.Attempt = 0
+	if !d.ShouldRetry() {
+		t.Fatal("attempt 0 with default cap should retry once")
+	}
+	d.Attempt = 1
+	if d.ShouldRetry() {
+		t.Fatal("attempt 1 with default cap (2) must not retry")
 	}
 }
 
@@ -72,12 +104,5 @@ func TestShouldRetry_CustomWindow(t *testing.T) {
 	d.Duration = 2 * time.Second
 	if !d.ShouldRetry() {
 		t.Errorf("2s is under the 3s custom window and should retry")
-	}
-}
-
-func TestShouldRetry_MaxAttemptsConstant(t *testing.T) {
-	// Guards the invariant the policy depends on: exactly one retry.
-	if MaxAttempts != 2 {
-		t.Fatalf("MaxAttempts = %d, want 2 (one original + one retry)", MaxAttempts)
 	}
 }
