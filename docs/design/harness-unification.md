@@ -171,19 +171,26 @@ fast-revert (epic Decision 8) as the safety net. Env `AGENT_*` rename folds in
 here with a fallback chain (epic Decision 7), since the harness reads env in one
 place (`resolveIdentity`).
 
-## Open decisions (need consensus before coding the gate slice)
+## Resolved decisions (2026-06-25, consensus with Grant)
 
-- **Q1 — Gate model.** Confirm: mode-*selected* branches (ownergate XOR
-  threadowner), NOT a single merged decision function. (Recommended.)
-- **Q2 — Thread store.** Confirm: adopt `threadowner.Store` everywhere with an
-  added clear semantic; PA stays file-backed/per-pod behind it. (Recommended.)
-- **Q3 — Ingress.** Confirm: ingress as a strategy param, Ross/Joanne stay
-  Socket Mode, defer/drop the HTTP convergence (revisit epic Decision 5).
-  (Recommended — lower risk, same LOC win.)
-- **Q4 — PA drainCap bug.** PA has a 30s local const shadowing the 60s package
-  const. Standardize to **60s** (match Ross/Joanne) or keep PA at 30s? Need the
-  intended value.
-- **Q5 — Handoff predicate.** What's the unified cross-agent admission policy —
-  default-mode "any peer bot," owner-mode "🤝-only," or a single rule both use?
-- **Q6 — End-state (deferrable).** Restate: decide one-binary vs N-entrypoints
-  at the end of the extraction, not now. OK to keep deferred?
+- **Q1 — Gate model: RESOLVED → mode-selected.** ownergate XOR threadowner by
+  mode; NOT a single merged decision function.
+- **Q2 — Thread store: RESOLVED → unify.** Adopt `threadowner.Store` everywhere
+  with an added clear semantic; PA stays file-backed/per-pod behind the shared
+  interface (no storage-backend change).
+- **Q3 — Ingress: RESOLVED → strategy param, defer convergence.** Ross/Joanne
+  stay Socket Mode; harness supports `socket | http-events` as a param. The
+  HTTP convergence (epic Decision 5) is **deferred** to its own future slice —
+  same LOC win, none of the migration/blast-radius risk. Default-mode agents
+  stay **replicas=1** regardless of ingress.
+- **Q4 — PA drainCap: RESOLVED → 60s.** The 30s local const is an accidental
+  shadow; standardize on the 60s package default all three intended.
+- **Q5 — Handoff predicate: RESOLVED → mode-specific.** Default-mode = "any peer
+  bot" (the Ross/Joanne fleet); owner-mode = "🤝 + specific peer only". Preserve
+  today's behavior per mode; just make the rule explicit in the shared pre-gate.
+- **Q6 — End-state: RESOLVED → keep deferred.** Decide one-binary vs
+  N-entrypoints at the end of the extraction, not now. The harness package +
+  thin per-agent `main` keeps both possible.
+
+All six settled → the gate slice is unblocked for implementation once the
+safe-first extractions (oauth_pool → session_queue → streaming → resume) land.
