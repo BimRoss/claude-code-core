@@ -1,0 +1,189 @@
+# Harness unification — design doc (claude-code-core#24)
+
+Status: **DRAFT / for consensus.** Author: 2026-06-25. Parent epic: #21.
+
+This doc is the design-first artifact #24 requires *before* any extraction. Its
+job is to (a) fix the architecture and (b) surface the genuine decisions so we
+agree on them before writing code. Open decisions are collected at the end.
+
+## Goal & non-goals
+
+**Goal:** stop maintaining the same harness three times. Lift the ~70%
+copy-pasted dispatcher/spawn/session machinery from `claude-code-ross`,
+`claude-code-joanne`, and `claude-code-personal-agent` into a shared
+`core/harness`, so a behavior or fix lands once.
+
+**Explicit non-goals (the legitimate differences we KEEP):**
+- Ross/Joanne keep **baked creds** (Google sidecar + GitHub PAT). No Connections
+  migration (epic Decision 6, descoped).
+- Ross/Joanne stay **default-mode** (answer anyone in channel, routed by the
+  two-agent fleet rules). Personal/team agents stay **owner-gated**. We are not
+  collapsing the bots into one identity.
+- We are **not** forcing Ross/Joanne off Socket Mode as a precondition (see
+  Ingress below). Ingress becomes a parameter, not a migration gate.
+- One-binary vs N-entrypoints is **not decided here** (epic Decision 2); the
+  extraction is structured so either is possible.
+
+The design principle throughout: **shared harness with clean seams for the
+real differences** — parameters, not a forced monolith.
+
+## Core insight: the two gates are orthogonal, mode-selected — NOT merged
+
+The audit framed `ownergate` ↔ `threadowner` as a conflicting merge. Reading the
+code, they're **two different axes that never both do work for the same agent**:
+
+- **`ownergate`** = *admission* ("is this sender allowed to talk to an agent
+  here?"). For default mode it is a **no-op**: `Check`/`CheckTeam` return `Pass`
+  unconditionally when `ownerSlackUserID == ""` (ownergate.go:`checkTeam` first
+  line). Admission gating only exists for personal/team agents.
+- **`threadowner`** = *fleet routing* ("given admission, which of the
+  Ross/Joanne pair owns this thread?" — dual-mention, channel locks,
+  Ross-default). It is meaningful only for the **two-agent default fleet**; a
+  single owner-gated agent has no counterpart, so it never runs.
+
+So the "reconciliation" is **selection by mode, not a merged decision
+function**:
+
+```
+mode = default            → ownergate is a no-op → threadowner routes
+mode = personal | team    → no counterpart → threadowner is absent → ownergate gates
+```
+
+Every "conflict" the audit flagged dissolves once you see it's mode-selected:
+
+| Audit "conflict" | Reality |
+|---|---|
+| Row 7: dual-mention "both reply" has no owner-mode meaning | It's a *fleet* rule; structurally absent when an owner is set. |
+| Row 9: unowned-thread generic → ownergate drops vs threadowner Ross-responds | Different *modes*: personal = don't barge owner's threads (drop); default = Ross-default (respond). Both correct for their mode. |
+| Row 10: release vs flip | personal = release claim (hand to a human); default = flip to the counterpart agent. Mode-specific, never simultaneous. |
+
+This is a much smaller and safer design than "one giant decision table," and it
+directly serves "easier to manage": each mode's rule stays legible.
+
+## Architecture: the `core/harness` boundary
+
+```
+core/harness (NEW shared package)
+  Dispatcher
+    1. pre-gate     : dedupe, kill-switch, ingress-normalize, handoff admission
+    2. gate (mode-selected):
+         default        → threadowner.DecideWithLock(...)
+         personal|team  → ownergate.CheckTeam(...)
+    3. spawn loop   : session-key → channel-context → claude spawn
+                      → spawnretry (OAuth slot failover) → stream → post
+    4. post-spawn   : silent-narration suppress, resume markers, engagement
+  Interfaces the harness depends on (impl wired per agent):
+    - Identity        (name, ownerID, mode, ingress, workspace, timeouts…)
+    - ThreadOwnership (unified; see below)
+    - Ingress         (socket | http-events; strategy param)
+    - FeatureModules  (watches, drains, gmail-confirm — #25, stay external)
+```
+
+**Stays per-agent (the seams):** identity/creds wiring, which feature-modules
+are enabled, the Slack app/manifest. **Moves to core/harness:** everything in
+the Dispatcher box above, which is the duplicated 70%.
+
+## Thread-ownership: one interface, two backends
+
+The audit's "two incompatible stores" collapses cleanly. `threadowner.Store` is
+already identity-valued:
+
+```go
+type Store interface {
+    Get(channel, threadTS string) (Owner, bool)
+    Set(channel, threadTS string, owner Owner) error
+}
+```
+
+PA's private `threadOwnerStore` (`owns/claim/release` → bool, file-backed) is
+just the **degenerate case where the only possible owner is "me"**:
+- `owns(c,t)`     ≡ `Get(c,t) == selfIdentity`
+- `claim(c,t)`    ≡ `Set(c,t, selfIdentity)`
+- `release(c,t)`  ≡ `Set(c,t, "")`  (add an explicit clear/Delete to the interface)
+
+**Proposal:** adopt `threadowner.Store` everywhere. Add a clear semantic
+(`Set("")` or `Delete`). Wire per mode:
+- default → existing **Redis** backend, owner-space `{ross, joanne}` (shared by
+  the fleet).
+- personal/team → **file** backend, owner-space `{selfID}` (per-pod isolated —
+  unchanged storage, just behind the shared interface).
+
+`ownergate`'s `ownsThread bool` argument becomes `store.Get()==selfID`. No agent
+changes storage backend; PA stays per-pod-isolated. We just stop having two
+shapes.
+
+## Parameters: divergent constants become per-agent config (preserve current values)
+
+These MUST become parameters, not silently-unified constants. Current values
+preserved unless flagged:
+
+| Param | Ross | Joanne | PA | Note |
+|---|---|---|---|---|
+| claude spawn timeout | 1h | **20m** | 1h | Joanne's 20m is a deliberate DM-latency choice — keep as param |
+| drain cap | 60s | 60s | **bug: 30s local shadows 60s pkg** | **needs a value decision** (see open Q4) |
+| session grace (queue) | 750ms | 750ms | **none** | unify to 750ms (PA inherits the race fix) |
+| session-key namespace | static `ross-session-v1` | **instructions-hash** (auto-invalidates on persona deploy) | static | Joanne's must stay a `func() string`, not a const |
+| queue persistence/replay | yes | yes | **none** | lifting the queue *adds* replay to PA → rename PA resume dir off `.ross-resume` first |
+| workspace isolation | per-channel | per-conversation | per-channel | param: isolation strategy |
+| team TTL / rate-limit | — | — | 60s / 8-per-min | team-mode params |
+
+## Ingress: a strategy parameter, not a forced migration
+
+Epic Decision 5 said "converge Ross/Joanne onto HTTP events." The audit found
+that's ~80% backend work (the gateway has **zero** Ross/Joanne routing — every
+event would 404), it revives the duplicate-spawn risk (Events-API retries vs
+in-memory per-process dedup), and it **couples three failure domains** onto the
+`events.makeacompany.ai` path that NXDOMAIN'd on 2026-06-24.
+
+**Proposal:** the harness abstracts ingress as a **strategy** (`socket |
+http-events`). Ross/Joanne keep Socket Mode; PA keeps HTTP events. We get the
+code-dedup win **without** the risky migration. Actual convergence onto one
+ingress is **deferred** to its own slice (or dropped) — it does not block the
+harness extraction and isn't required for "less code." (See open Q3.)
+
+Whichever ingress: the harness must **keep replicas=1** for default-mode agents
+(dedupe/queue/inflight/loop-ownership are in-process; HTTP lifts the
+socket-singleton *deployment* constraint but not the correctness one).
+
+## The one thing that genuinely must merge: handoff admission
+
+Cross-agent handoff admission has **diverged** and this is a real (small) merge:
+Ross admits any peer bot (`isHandoffFromPeerAgent`); PA admits only 🤝+Joanne
+(`isHandoffFromJoanne`). The shared pre-gate needs one predicate with the policy
+made explicit per mode (default fleet vs owner-gated). Decide the unified policy
+during this work; don't let the extraction pick a winner silently.
+
+## Extraction sequencing (safe-first — the actual rollout)
+
+Pure-LOC-win, no gate semantics, fast-revert-safe — do these FIRST:
+1. `oauth_pool` (triplicated) → core/harness
+2. `session_queue` (near-identical; PA gains grace+replay — verify resume dir)
+3. `streaming`
+4. `resume` markers
+
+Then the harder, design-dependent slice:
+5. `ThreadOwnership` unified interface + clear semantic
+6. unified pre-gate (dedupe, kill-switch, **handoff predicate**, ingress strategy)
+7. mode-selected gate dispatch (ownergate XOR threadowner) + `handleMessage`
+
+Each slice ships behind the existing per-agent path, one at a time, with
+fast-revert (epic Decision 8) as the safety net. Env `AGENT_*` rename folds in
+here with a fallback chain (epic Decision 7), since the harness reads env in one
+place (`resolveIdentity`).
+
+## Open decisions (need consensus before coding the gate slice)
+
+- **Q1 — Gate model.** Confirm: mode-*selected* branches (ownergate XOR
+  threadowner), NOT a single merged decision function. (Recommended.)
+- **Q2 — Thread store.** Confirm: adopt `threadowner.Store` everywhere with an
+  added clear semantic; PA stays file-backed/per-pod behind it. (Recommended.)
+- **Q3 — Ingress.** Confirm: ingress as a strategy param, Ross/Joanne stay
+  Socket Mode, defer/drop the HTTP convergence (revisit epic Decision 5).
+  (Recommended — lower risk, same LOC win.)
+- **Q4 — PA drainCap bug.** PA has a 30s local const shadowing the 60s package
+  const. Standardize to **60s** (match Ross/Joanne) or keep PA at 30s? Need the
+  intended value.
+- **Q5 — Handoff predicate.** What's the unified cross-agent admission policy —
+  default-mode "any peer bot," owner-mode "🤝-only," or a single rule both use?
+- **Q6 — End-state (deferrable).** Restate: decide one-binary vs N-entrypoints
+  at the end of the extraction, not now. OK to keep deferred?
