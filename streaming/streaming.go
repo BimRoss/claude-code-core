@@ -236,23 +236,32 @@ func classifyWrite(path string) (string, bool) {
 
 // --- Secret redaction (shared; all agents scrub log previews) ---
 
-// secretRedactRe matches token-shaped substrings we never want in slog
-// previews. Shopify Admin (shpat_) + OAuth user (shpua_) tokens, and an
-// env-var-shaped SHOPIFY_ADMIN_TOKEN=value occurrence. Extend as new secret
-// shapes enter the fleet.
-var secretRedactRe = regexp.MustCompile(`shp(at|ua)_[a-zA-Z0-9_-]{16,}|SHOPIFY_ADMIN_TOKEN=[^\s"]+`)
+// secretRedactRe matches secret-shaped substrings we never want in slog
+// previews. Two forms: (1) env-var assignments KEY=value — the value is
+// redacted, the KEY kept so logs still show the var was present; (2) bare
+// token shapes by their well-known prefixes. Covers the secret families the
+// fleet actually handles (Shopify, Anthropic, the OAuth pool, GitHub, Slack,
+// Google). Extend as new shapes enter the fleet.
+var secretRedactRe = regexp.MustCompile(
+	`(?:SHOPIFY_ADMIN_TOKEN|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN(?:_[0-9]+)?|GH_TOKEN|GITHUB_TOKEN)=[^\s"]+` + // env-shaped
+		`|shp(?:at|ua)_[A-Za-z0-9_-]{16,}` + // Shopify admin / oauth-user
+		`|sk-ant-[A-Za-z0-9_-]{20,}` + // Anthropic API / OAuth
+		`|xox[baprs]-[A-Za-z0-9-]{10,}` + // Slack bot/user/app/refresh
+		`|gh[pousr]_[A-Za-z0-9]{20,}` + // GitHub classic PAT/OAuth/app
+		`|github_pat_[A-Za-z0-9_]{20,}` + // GitHub fine-grained PAT
+		`|AIza[A-Za-z0-9_-]{20,}`) // Google API key
 
-// Redact scrubs every known secret pattern from s.
+// Redact scrubs every known secret pattern from s. Env-shaped matches keep the
+// KEY= prefix; bare token shapes are replaced wholesale.
 func Redact(s string) string {
 	if s == "" {
 		return s
 	}
 	return secretRedactRe.ReplaceAllStringFunc(s, func(match string) string {
-		const envPrefix = "SHOPIFY_ADMIN_TOKEN="
-		if strings.HasPrefix(match, envPrefix) {
-			return envPrefix + "[REDACTED]"
+		if i := strings.IndexByte(match, '='); i >= 0 {
+			return match[:i+1] + "[REDACTED]"
 		}
-		return "[REDACTED_SHOPIFY_TOKEN]"
+		return "[REDACTED_TOKEN]"
 	})
 }
 
