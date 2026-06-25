@@ -153,6 +153,26 @@ Ross admits any peer bot (`isHandoffFromPeerAgent`); PA admits only 🤝+Joanne
 made explicit per mode (default fleet vs owner-gated). Decide the unified policy
 during this work; don't let the extraction pick a winner silently.
 
+## OAuth pool: N-slot, not two keys (Grant, 2026-06-25)
+
+The shared pool is **not** locked to two keys. Design (shipped as `core/oauthpool`,
+PR #31):
+- **Discovery:** every populated `CLAUDE_CODE_OAUTH_TOKEN` (slot 1) +
+  `CLAUDE_CODE_OAUTH_TOKEN_2.._N`. Add a key → add a slot, no code change. Gaps
+  tolerated; empty slots skipped.
+- **Round-robin** over populated slots (canonical Joanne logic: skip-empty,
+  single-populated = no alternate — propagates the 2026-06-20 fix to Ross/PA).
+- **Failover iterates the whole pool** (`Others(tried)`), not a two-key bounce.
+- **Per-slot cooldown** (`MarkLimited(label, until)`): a rate-limited account is
+  skipped until its window resets — the resilience win during a sustained
+  squeeze. `Next` falls back to the soonest-recovering slot if all are cooling.
+
+**Coupled change at adoption:** `core/spawnretry`'s fixed `MaxAttempts = 2` /
+`HasSecondSlot bool` generalize to "retry across remaining untried pool slots"
+(bounded by pool size), driven by `Pool.Others`. The per-attempt safety gates
+(fast-fail, no output posted, not aborted) are unchanged. This is where the
+richer per-slot failover (epic's deferred OAuth-resilience item) actually lands.
+
 ## Extraction sequencing (safe-first — the actual rollout)
 
 Pure-LOC-win, no gate semantics, fast-revert-safe — do these FIRST:
