@@ -130,3 +130,31 @@ func TestLoad_EmptyBaseNoError(t *testing.T) {
 		t.Fatalf("missing base should yield nil, got %v", got)
 	}
 }
+
+// TestLoadMarkers_ScansBaseAndSubdirs covers the shared-base case: an agent
+// whose conversation workspace IS the base (Joanne's welcome/MPIM surfaces)
+// writes markers to <base>/.session-resume/ directly, while per-channel
+// conversations write to <base>/<channel>/.session-resume/. LoadMarkers must
+// return BOTH (otherwise interrupted onboarding turns silently never replay).
+func TestLoadMarkers_ScansBaseAndSubdirs(t *testing.T) {
+	base := t.TempDir()
+	// Per-channel marker.
+	if err := WriteMarker(filepath.Join(base, "C1"), Marker[fileRef]{Channel: "C1", MessageTS: "1.1", InterruptedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	// Shared-base marker (workspace == base).
+	if err := WriteMarker(base, Marker[fileRef]{Channel: "WELCOME", MessageTS: "2.2", InterruptedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	got := LoadMarkers[fileRef](base)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 markers (1 per-channel + 1 base), got %d: %+v", len(got), got)
+	}
+	seen := map[string]bool{}
+	for _, m := range got {
+		seen[m.MessageTS] = true
+	}
+	if !seen["1.1"] || !seen["2.2"] {
+		t.Fatalf("missing a marker: per-channel(1.1)=%v base(2.2)=%v", seen["1.1"], seen["2.2"])
+	}
+}
