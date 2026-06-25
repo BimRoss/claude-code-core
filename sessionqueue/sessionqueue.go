@@ -200,8 +200,17 @@ func (q *Queue[F]) Enqueue(
 		q.sessions[sessionID] = sq
 	}
 	q.queuedByMsg[msgKey] = qm
-	q.mu.Unlock()
-
+	// Hold q.mu ACROSS the sq append. The drain's GC recheck acquires q.mu
+	// then sq.mu and deletes the session only if it sees waiters==0 &&
+	// !running. If we released q.mu here (before appending), that recheck
+	// could run in the gap, delete this very sq, and then we'd append to an
+	// orphaned queue and launch a SECOND drain — two concurrent `claude
+	// --resume` on one session's JSONL, the exact duplicate-spawn this queue
+	// exists to prevent (it's a logical race, invisible to -race). Keeping
+	// q.mu held until after we set running/waiters makes the recheck observe
+	// a live session and skip the delete. Lock order is q.mu → sq.mu wherever
+	// both are held (here and the GC recheck); the drain's main loop holds
+	// only sq.mu, so there is no deadlock.
 	sq.mu.Lock()
 	wasRunning := sq.running
 	sq.waiters = append(sq.waiters, qm)
@@ -209,6 +218,7 @@ func (q *Queue[F]) Enqueue(
 		sq.running = true
 	}
 	sq.mu.Unlock()
+	q.mu.Unlock()
 
 	if wasRunning {
 		slog.Info("session_queue_waited",
