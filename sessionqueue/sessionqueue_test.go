@@ -508,3 +508,78 @@ func TestReplayNoMarkersIsNoOp(t *testing.T) {
 		t.Error("Replay should not reinject when there are no markers")
 	}
 }
+
+// TestEnqueue_NoConcurrentDrainPerSession hammers a single session with
+// thousands of concurrent enqueues across drain-empty/GC boundaries, asserting
+// the invariant the queue exists to uphold: at most one drain (one `claude
+// --resume`) runs per session_id at a time. The runner bumps a per-session
+// "active" counter; >1 means two drains ran at once.
+//
+// Honesty note: this exercises the concurrent enqueue/drain/GC paths under
+// -race (there was previously NO concurrency test) and asserts the
+// no-double-drain invariant, but it does NOT deterministically reproduce the
+// drain-GC resurrection race — that interleaving (a gap between the q.mu release
+// and the sq append) only exists in the buggy lock ordering and can't be forced
+// from outside the package. The fix is correct by construction: Enqueue holds
+// q.mu across the append, so the GC recheck (also q.mu→sq.mu) either observes
+// the live session and skips the delete, or completes its delete before the
+// lookup — exactly one drain per session in both orderings. This test is the
+// -race safety net on top of that reasoning.
+func TestEnqueue_NoConcurrentDrainPerSession(t *testing.T) {
+	q := New[fileRef](0) // grace disabled → fast drains → GC fires between bursts
+
+	var inflight sync.WaitGroup
+	var enqueued sync.WaitGroup
+	var active int32
+	var maxActive int32
+	var doubled atomic.Bool
+
+	run := func(batch []*Msg[fileRef]) {
+		n := atomic.AddInt32(&active, 1)
+		if n > 1 {
+			doubled.Store(true)
+		}
+		for {
+			m := atomic.LoadInt32(&maxActive)
+			if n <= m || atomic.CompareAndSwapInt32(&maxActive, m, n) {
+				break
+			}
+		}
+		time.Sleep(30 * time.Microsecond) // widen the concurrent window
+		atomic.AddInt32(&active, -1)
+	}
+
+	const iters = 3000
+	for i := 0; i < iters; i++ {
+		ts := "a" + itoa(i)
+		q.Enqueue("sess", msgEvent("C1", "", ts), nil, "", &inflight, run, nil, nil)
+		// Fire a second enqueue for the SAME session from a goroutine to race
+		// the drain-empty/GC boundary the just-finished batch is approaching.
+		enqueued.Add(1)
+		go func(i int) {
+			defer enqueued.Done()
+			q.Enqueue("sess", msgEvent("C1", "", "b"+itoa(i)), nil, "", &inflight, run, nil, nil)
+		}(i)
+	}
+
+	enqueued.Wait() // all Enqueue calls returned → all inflight.Add done
+	inflight.Wait() // all drains finished
+
+	if doubled.Load() {
+		t.Fatalf("two drains ran concurrently for one session (resurrection race): maxActive=%d", atomic.LoadInt32(&maxActive))
+	}
+}
+
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	var b [20]byte
+	p := len(b)
+	for i > 0 {
+		p--
+		b[p] = byte('0' + i%10)
+		i /= 10
+	}
+	return string(b[p:])
+}
