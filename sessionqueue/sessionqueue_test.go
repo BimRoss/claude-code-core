@@ -48,15 +48,21 @@ func waitFor(t *testing.T, d time.Duration, fn func() bool) {
 	t.Fatalf("condition not met within %s", d)
 }
 
-func TestNewDefaultsGrace(t *testing.T) {
-	if got := New[fileRef](0).grace; got != defaultGrace {
-		t.Errorf("New(0) grace = %s, want default %s", got, defaultGrace)
+func TestNewGraceVerbatim(t *testing.T) {
+	// grace is stored verbatim: 0 disables (Ross's ROSS_SESSION_GRACE_MS=0),
+	// negative clamps to 0, positive passes through. The 750ms default is the
+	// caller's concern (DefaultGrace), not New's.
+	if got := New[fileRef](0).grace; got != 0 {
+		t.Errorf("New(0) grace = %s, want 0 (disabled)", got)
 	}
-	if got := New[fileRef](-5 * time.Second).grace; got != defaultGrace {
-		t.Errorf("New(-5s) grace = %s, want default %s", got, defaultGrace)
+	if got := New[fileRef](-5 * time.Second).grace; got != 0 {
+		t.Errorf("New(-5s) grace = %s, want 0 (clamped)", got)
 	}
 	if got := New[fileRef](100 * time.Millisecond).grace; got != 100*time.Millisecond {
 		t.Errorf("New(100ms) grace = %s, want 100ms", got)
+	}
+	if got := New[fileRef](DefaultGrace).grace; got != 750*time.Millisecond {
+		t.Errorf("New(DefaultGrace) grace = %s, want 750ms", got)
 	}
 }
 

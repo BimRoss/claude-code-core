@@ -70,9 +70,11 @@ const queueDir = ".session-queue"
 // semantics so a forgotten queue can't surprise a channel days later).
 const queueStaleness = 30 * time.Minute
 
-// defaultGrace is the inter-batch sleep applied when New is given a
-// non-positive grace. See drain for why the delay exists.
-const defaultGrace = 750 * time.Millisecond
+// DefaultGrace is the inter-batch sleep agents should use when their grace
+// env (e.g. ROSS_SESSION_GRACE_MS) is UNSET. Pass it to New for the unset
+// case; pass the parsed value (including 0 to disable) otherwise. See drain
+// for why the delay exists.
+const DefaultGrace = 750 * time.Millisecond
 
 // Msg is a single queued Slack message plus its file references. Event and
 // Files are exported because the Runner consumes them; the rest is internal
@@ -112,12 +114,18 @@ type Queue[F any] struct {
 }
 
 // New constructs an empty Queue. grace is the inter-batch sleep between
-// consecutive spawns of the same session; grace <= 0 uses defaultGrace
-// (750ms). Agents resolve their own env (e.g. ROSS_SESSION_GRACE_MS) and
-// pass the result in.
+// consecutive spawns of the same session, stored VERBATIM: a grace of 0
+// disables the delay entirely (the documented Ross behavior for
+// ROSS_SESSION_GRACE_MS=0), a negative value is clamped to 0.
+//
+// The 750ms default is the CALLER's concern, not New's: an agent resolves its
+// own env and passes DefaultGrace when the env is unset, the parsed value
+// otherwise (including 0 to disable). Folding the default into New here would
+// make a deliberate "0 = disable" indistinguishable from "unset", silently
+// re-enabling a 750ms delay an operator turned off.
 func New[F any](grace time.Duration) *Queue[F] {
-	if grace <= 0 {
-		grace = defaultGrace
+	if grace < 0 {
+		grace = 0
 	}
 	return &Queue[F]{
 		grace:       grace,
