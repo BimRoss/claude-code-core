@@ -173,6 +173,37 @@ PR #31):
 (fast-fail, no output posted, not aborted) are unchanged. This is where the
 richer per-slot failover (epic's deferred OAuth-resilience item) actually lands.
 
+## Session mapping (Slack → Claude session), consensus 2026-06-25
+
+**Model (already shipped for channels + PA's DMs):** a top-level message == a new
+session (`hash(channel, message_ts)`); thread replies resume it
+(`hash(channel, thread_ts)`); loop ticks share one session per loop
+(`hash(channel, "loop:"+id)`). Granularity = **thread-root** (a thread is a
+shared conversation) — not per-user, not whole-channel. This holds ONLY because
+of threads-default (#22): if the bot replied at top level, the next message
+would fork a new session. Session model and thread-default are the same design.
+
+**Unified rule (resolved):**
+- **DM keying → UNIFORM per-thread.** DMs behave exactly like channels; drop the
+  Ross/Joanne `channelLevelThreadKey` rolling model. PA's `deriveSessionKey`
+  (no DM special-case) is the target. ⚠️ Changes Joanne's onboarding DMs from
+  rolling → per-thread; fragmentation across top-level DMs is softened by
+  auto-memory + the channel-context preamble (a "fresh" session still sees
+  recent messages).
+- **`resolveSessionFlag` → Joanne's workspace-scoped detection**, NOT Ross/PA's
+  glob-across-all-project-dirs. Globbing matched a stale jsonl from a different
+  workspace and handed claude an unsatisfiable `--resume` (Joanne #65). Scoped
+  is strictly safer.
+- **Namespace → UNIVERSAL persona/instructions-hash** (Joanne #55) for all three:
+  mix a hash of the agent's instructions/persona into the session namespace so a
+  persona/instructions change auto-starts fresh sessions instead of `--resume`-ing
+  onto a transcript the model anchors on. PA mixes in
+  `PERSONAL_AGENT_SYSTEM_PROMPT` → owner edits take effect immediately.
+
+Lands as the **session-module extraction slice** (`deriveSessionKey` +
+`resolveSessionFlag` + namespace), parameterized: namespace is a
+`func() string`, not a const.
+
 ## Extraction sequencing (safe-first — the actual rollout)
 
 Pure-LOC-win, no gate semantics, fast-revert-safe — do these FIRST:
