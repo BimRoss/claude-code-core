@@ -58,14 +58,16 @@ const (
 	// a spawn gets when nothing else pins a value, and where an invalid pin
 	// degrades to. Must always be a non-1M model that runs on the pool.
 	//
-	// Sonnet is the interactive floor (2026-06-25): one slot in the shared
-	// OAuth pool hit its rate limit, so the default tier'd down from Opus to
-	// conserve headroom. Opus is still reached for heavy lifts via Tier-3
-	// Task-tool subagents, or pinned per-agent (ROSS/JOANNE_DEFAULT_MODEL) /
-	// per-channel. Ross and Joanne pin Sonnet explicitly in their deployment
-	// env; the personal agent inherits this constant (its reconciler scrubs
-	// any per-pod DEFAULT_MODEL, so this is its only interactive default).
-	DefaultModel  = "claude-sonnet-4-6"
+	// Opus is the interactive floor (2026-06-26): the 2026-06-25 tier-down to
+	// Sonnet (for OAuth-pool headroom after a slot hit its rate limit) was
+	// reverted because users reported degraded intelligence. Ross and Joanne
+	// pin Opus explicitly in their deployment env; the personal agent inherits
+	// this constant (its reconciler scrubs any per-pod DEFAULT_MODEL, so this
+	// is its only interactive default). Must always be a non-1M model that runs
+	// on the pool — claude-opus-4-8[1m] is denied (pool has no 1M credits).
+	// NOTE: the shared pool is single-token with no per-slot failover, so this
+	// raises Opus rate-limit exposure; re-tier to Sonnet here if a slot 429s.
+	DefaultModel  = "claude-opus-4-8"
 	DefaultEffort = "high"
 
 	// SettingsFile is the per-workspace overrides file an agent-in-a-channel can
